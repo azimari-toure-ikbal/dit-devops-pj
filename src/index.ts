@@ -1,8 +1,20 @@
-import { serve } from "@hono/node-server";
+import { zValidator } from "@hono/zod-validator";
+import { addHours } from "date-fns";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import {
+  deleteCookie,
+  getCookie,
+  setCookie,
+  setSignedCookie,
+} from "hono/cookie";
 import { cors } from "hono/cors";
 import { db } from "./db";
-import { users } from "./db/schema";
+import { tokens, users } from "./db/schema";
+import { genApiKey, genRandomCode, sendVerificationEmail } from "./lib/utils";
+import { authSchema, verifySchema } from "./lib/validators";
+
+const PORT = 3000;
 
 const app = new Hono();
 
@@ -11,16 +23,191 @@ app.onError((err, c) => {
   return c.json({ error: err.message });
 });
 
+app.post("/login", zValidator("json", authSchema), async (c) => {
+  const { email } = c.req.valid("json");
+
+  const res = await db.select().from(users).where(eq(users.email, email));
+
+  if (res.length === 0) {
+    throw new Error("User not found");
+  }
+
+  const user = res[0];
+
+  if (user.code) {
+    throw new Error("User is already verified");
+  }
+
+  const code = genRandomCode();
+
+  await db
+    .update(users)
+    .set({ code, updatedAt: new Date() })
+    .where(eq(users.email, email));
+
+  await sendVerificationEmail(email, code);
+
+  return c.json({ success: true });
+});
+
+app.post("/signup", zValidator("json", authSchema), async (c) => {
+  const { email } = c.req.valid("json");
+
+  const code = genRandomCode();
+
+  await sendVerificationEmail(email, code);
+
+  const res = await db.select().from(users).where(eq(users.email, email));
+
+  if (res.length === 0) {
+    await db.insert(users).values({
+      email,
+      code,
+    });
+  }
+
+  await db
+    .update(users)
+    .set({
+      code,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.email, email));
+
+  return c.json({ sucess: true });
+});
+
+app.post("/verify", zValidator("json", verifySchema), async (c) => {
+  const { email, code } = c.req.valid("json");
+
+  const res = await db.select().from(users).where(eq(users.email, email));
+
+  if (res.length === 0) {
+    throw new Error("User not found");
+  }
+
+  const user = res[0];
+
+  if (user.code !== code) {
+    throw new Error("Invalid validation code");
+  }
+
+  await db
+    .update(users)
+    .set({ code: null, updatedAt: new Date() })
+    .where(eq(users.email, email));
+
+  // Set a cookie to authenticate the user
+  setCookie(c, "auth", "true", {
+    path: "/",
+    secure: true,
+    domain: "example.com",
+    httpOnly: true,
+    maxAge: 1000,
+    expires: addHours(new Date(), 5),
+    sameSite: "Strict",
+  });
+
+  return c.json({ success: true });
+});
+
+app.post("/logout", zValidator("json", authSchema), async (c) => {
+  const { email } = c.req.valid("json");
+
+  await db
+    .update(users)
+    .set({ code: null, updatedAt: new Date() })
+    .where(eq(users.email, email));
+
+  deleteCookie(c, "auth");
+  return c.json({ success: true });
+});
+
+//* Token
+app.post("/tokens/token", zValidator("json", authSchema), async (c) => {
+  if (!process.env.COOKIE_SECRET) {
+    throw new Error("COOKIE_SECRET is not set");
+  }
+
+  const auth = getCookie(c, "auth");
+
+  if (!auth || auth !== "true") {
+    await db.update(users).set({ code: null, updatedAt: new Date() });
+    throw new Error("Not authenticated");
+  }
+
+  const { email } = c.req.valid("json");
+
+  const res = await db.select().from(users).where(eq(users.email, email));
+
+  if (res.length === 0) {
+    throw new Error("User not found");
+  }
+
+  const user = res[0];
+
+  // Check if the user already has a token
+  const tokenExists = await db
+    .select()
+    .from(tokens)
+    .where(eq(tokens.userId, user.id));
+
+  if (tokenExists.length > 0) {
+    throw new Error("User already has a token");
+  }
+
+  const token = genApiKey();
+
+  await db.insert(tokens).values({
+    userId: user.id,
+    tokenVal: token,
+  });
+
+  await setSignedCookie(c, "token", token, process.env.COOKIE_SECRET, {
+    path: "/",
+    secure: true,
+    domain: "example.com",
+    httpOnly: true,
+    maxAge: 1000,
+    expires: addHours(new Date(), 5),
+    sameSite: "Strict",
+  });
+  return c.json({ token });
+});
+
+app.delete("/tokens/token", async (c) => {
+  const auth = getCookie(c, "auth");
+  const token = getCookie(c, "token");
+
+  if (!auth || auth !== "true") {
+    await db.update(users).set({ code: null, updatedAt: new Date() });
+    throw new Error("Not authenticated");
+  }
+
+  if (!token) {
+    throw new Error("No token found");
+  }
+
+  await db.delete(tokens).where(eq(tokens.tokenVal, token));
+
+  return c.json({ success: true });
+});
+
 app.get("/", async (c) => {
-  const res = await db.select().from(users);
+  const res = getCookie(c, "auth");
 
-  return c.json(res);
+  const key = genApiKey();
+
+  const signed = await getCookie(c, "token");
+
+  return c.json({
+    key,
+    res,
+    signed,
+  });
 });
 
-const port = 3000;
-console.log(`Server is running on port ${port}`);
-
-serve({
+export default {
+  port: PORT,
   fetch: app.fetch,
-  port,
-});
+};
