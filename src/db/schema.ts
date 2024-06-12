@@ -1,4 +1,5 @@
 import {
+  bigint,
   pgTable,
   serial,
   text,
@@ -35,11 +36,17 @@ export type NewToken = typeof tokens.$inferInsert;
 
 export const links = pgTable("links", {
   id: serial("id").primaryKey(),
+  title: text("title").notNull(),
   userId: uuid("user_id")
     .notNull()
     .references(() => users.id),
   original: text("url").notNull(),
   shortened: text("shortened_url").notNull(),
+  clicks: bigint("clicks", {
+    mode: "number",
+  })
+    .notNull()
+    .default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
