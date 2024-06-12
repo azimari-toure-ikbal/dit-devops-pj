@@ -1,3 +1,4 @@
+import { nanoid } from "nanoid";
 import OTPEmail from "~/emails/otp";
 import { resend } from "./resend";
 
@@ -21,6 +22,10 @@ export const genApiKey = () => {
   }
 
   return apiKey;
+};
+
+export const genRandUrlKey = () => {
+  return nanoid(8);
 };
 
 export const sendVerificationEmail = async (email: string, code: string) => {
