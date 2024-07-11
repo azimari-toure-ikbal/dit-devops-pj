@@ -279,6 +279,7 @@ app.get("/", async (c) => {
   });
 });
 
+console.info("Server running and listening on port", PORT);
 export default {
   port: PORT,
   fetch: app.fetch,
