@@ -9,5 +9,5 @@ describe("true", () => {
 describe("false", () => {
   it("should be false", () => {
     expect(false).toBeFalsy();
-  });
+  });
 });

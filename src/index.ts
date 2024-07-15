@@ -279,6 +279,10 @@ app.get("/", async (c) => {
   });
 });
 
+app.get("/ping", async (c) => {
+  return c.json({ success: true });
+});
+
 console.info("Server running and listening on port", PORT);
 export default {
   port: PORT,
